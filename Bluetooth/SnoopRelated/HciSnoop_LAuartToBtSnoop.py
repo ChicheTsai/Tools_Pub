@@ -3,72 +3,6 @@ import sys
 import csv
 import BtSnoop
 
-######  def get_snoop_pkt_idx_from_LA_data(info):
-######      data = info[5]
-######      readIdx = info[3]
-######      
-######      #print(readIdx, len(data))
-######      if(readIdx == len(data)):
-######          info[1] = 0x02
-######          info[2] = 0xFFFFFFFF
-######          info[4] = -1
-######          return info
-######      elif(readIdx > len(data)):
-######          print("DEBUG, get_snoop_pkt_idx_from_LA_data")
-######          exit()
-######      
-######      T = data[readIdx][0]
-######      T = float(T)
-######      readData = data[readIdx][1]
-######      pktLen = -1
-######      
-######      if(readData == "0x01"): #HCI command
-######          pktLen = int(data[readIdx + 3][1],16) +4
-######      elif(readData == "0x02" or readData == "0x02"): #ACL data
-######          pktLen = (int(data[readIdx + 4][1],16)<<8) + (int(data[readIdx + 3][1],16)) +5
-######      elif(readData == "0x04"): #HCI event
-######          pktLen = int(data[readIdx + 2][1],16) +3
-######      
-######  #    elif(readData == "0x05"): #ISO data
-######      
-######      info[1] = True
-######      info[2] = T
-######      info[4] = pktLen
-######      #print(pktLen)
-######      return info
-######  
-######  def get_snoop_pkt_data_from_LA_data(info):
-######      ret = ""
-######      for i in range(0,info[4]):
-######          readData = (info[5][info[3]+i][1]).replace("0x","")
-######          ret = ret + readData + " "
-######          #print(info[5][info[3]+i][1])
-######      return ret
-######  
-######  def get_base_time(readInfo, n):
-######      minT = 0xFFFFFFFF
-######  
-######      for i in range(0,n):
-######          t = float(readInfo[i][5][1][0])
-######          if(t < minT):
-######              minT = t
-######      return minT
-######   
-######  def get_earlist_packet_idx(readInfo):
-######      minT = 0xFFFFFFFF
-######      minIdx = 0
-######      
-######      for i in range(0,len(readInfo)):
-######          idx = readInfo[i][3]
-######          t = readInfo[i][2] #float(readInfo[i][5][idx][0])
-######          
-######          #print(idx,t, readInfo[i][2])
-######          if(t < minT):
-######              minT = t
-######              minIdx = i
-######      #print(minIdx)
-######      return minIdx
-
 class InfoSubHead():
     def __init__(self, fileName, direction, csvFile):
         self.fileName = fileName
@@ -103,19 +37,33 @@ class InfoSubHead():
 
     def get_snoop_pkt_Index_from_LA_data(self):
         if(self.readFlag == True):
+            #print("???")
             return
         else:
-            if(self.data[0][self.rdIdx][1] == "0x01"): #HCI command
+            #print("xxx: ", self.rdIdx, len(self.data[0]))
+            if(self.rdIdx >= len(self.data[0])):
+                self.readFlag = False
+                return
+            elif(self.data[0][self.rdIdx][1] == "0x01"): #HCI command
                 self.pktLen = int(self.data[0][self.rdIdx + 3][1],16) +4
-            elif(self.data[0][self.rdIdx][1] == "0x02"): #HCI command
+            elif(self.data[0][self.rdIdx][1] == "0x02"):
                 self.pktLen = (int(self.data[0][self.rdIdx + 4][1],16) << 8) + (int(self.data[0][self.rdIdx + 3][1],16)) + 5 
             elif(self.data[0][self.rdIdx][1] == "0x04"): #HCI event
                 self.pktLen = (int(self.data[0][self.rdIdx + 2][1],16)) + 3
             elif(self.data[0][self.rdIdx][1] == "0x05"): #ISO Event
-                self.pktLen = (int(self.data[0][self.rdIdx + 2][1],16)) + 3 ## CHICHE DEBUG HERE
+                tbFlag = ((int(self.data[0][self.rdIdx + 2][1],16)) >> 2) & 0x01
+                self.pktLen = (int(self.data[0][self.rdIdx + 4][1],16)) & 0x7F
+                self.pktLen = (self.pktLen << 8) + (int(self.data[0][self.rdIdx + 3][1],16))
+                if(tbFlag):
+                    self.pktLen = self.pktLen + 4
+                self.pktLen = self.pktLen + 5
+#                print(self.rdIdx, self.pktLen, tbFlag)
+            else:
+                print("Error", self.rdIdx)               
+                exit()
                 
             self.pktIdx = self.rdIdx
-            self.rdIdx = self.rdIdx = self.rdIdx = self.rdIdx + self.pktLen
+            self.rdIdx = self.rdIdx + self.pktLen
             self.readFlag = True
             #print(self.pktLen)
  
@@ -132,7 +80,14 @@ class InfoHead():
         self.f = open(self.fileName, "wb") 
         txData = BtSnoop.get_BTsnoop_Header()
         BtSnoop.write_data_into_hci(txData, self.f)
-        
+    
+    def close(self):
+        self.f.close()
+        if(self.h2cNode != None):
+            self.h2cNode.csvFile.close()
+        if(self.c2hNode != None):
+            self.c2hNode.csvFile.close()
+    
     def get_base_time(self):
         if(self.h2cNode != None):
             t = float(self.h2cNode.data[0][self.h2cNode.headIdx][0])
@@ -193,9 +148,12 @@ class InfoHead():
         processState = 0xFF
         
         if(self.h2cNode != None and self.c2hNode != None):
+#            print(self.h2cNode.readFlag, self.c2hNode.readFlag, )
             if(self.h2cNode.readFlag == True and self.c2hNode.readFlag == True):
-                t_h2c = float(self.h2cNode.data[0][self.h2cNode.rdIdx][0])
-                t_c2h = float(self.c2hNode.data[0][self.c2hNode.rdIdx][0])            
+#                print(self.h2cNode.pktIdx, len(self.h2cNode.data[0]))
+#                print(self.c2hNode.pktIdx, len(self.c2hNode.data[0]))
+                t_c2h = float(self.c2hNode.data[0][self.c2hNode.pktIdx][0])                            
+                t_h2c = float(self.h2cNode.data[0][self.h2cNode.pktIdx][0])
                 #print(t_h2c, t_c2h)
                 if(t_h2c < t_c2h):
                     processState = 0x00
@@ -223,18 +181,19 @@ class InfoHead():
         if(result != False):
             if(processState == 0x00):
                 for i in range(0, self.h2cNode.pktLen):
-                    readData = (self.h2cNode.data[0][self.h2cNode.rdIdx + i][1]).replace("0x","")
+                    readData = (self.h2cNode.data[0][self.h2cNode.pktIdx + i][1]).replace("0x","")
                     ret = ret + readData + " "
-                t_us = BtSnoop.convert_time2timeStr(float(self.h2cNode.data[0][self.h2cNode.rdIdx][0]) - self.Tbase)  
+                t_us = BtSnoop.convert_time2timeStr(float(self.h2cNode.data[0][self.h2cNode.pktIdx][0]) - self.Tbase)  
                 self.h2cNode.readFlag = False
+#                print("Test04", self.h2cNode.pktLen)
             elif(processState == 0x01):
                 for i in range(0, self.c2hNode.pktLen):
-                    readData = (self.c2hNode.data[0][self.c2hNode.rdIdx + i][1]).replace("0x","")
+                    readData = (self.c2hNode.data[0][self.c2hNode.pktIdx + i][1]).replace("0x","")
                     ret = ret + readData + " "
-                t_us = BtSnoop.convert_time2timeStr(float(self.c2hNode.data[0][self.c2hNode.rdIdx][0]) - self.Tbase)
+                t_us = BtSnoop.convert_time2timeStr(float(self.c2hNode.data[0][self.c2hNode.pktIdx][0]) - self.Tbase)
                 self.c2hNode.readFlag = False
             
-            print(ret, "\n")
+#            print(ret, "\n")    #CHICHE debug data
             writeData = ret.strip()
             length = int((len(writeData) + 1) / 3)
             hciData = BtSnoop.get_BTsnoop_PktHeader(length)
@@ -244,6 +203,8 @@ class InfoHead():
                 elif(writeData[0:2] == "02"):    #ACL
                     hciData = BtSnoop.get_BTsnoop_TxPkt(hciData, writeData, t_us, 0x02)
                 elif(writeData[0:2] == "05"):    #ISO_ACL
+#                    print("Test 01")
+#                    exit()
                     hciData = BtSnoop.get_BTsnoop_TxPkt(hciData, writeData, t_us, 0x05)
             elif(processState == 0x00):
                 if(writeData[0:2] == "04"):        #event
@@ -251,6 +212,7 @@ class InfoHead():
                 elif(writeData[0:2] == "02"):      #ACL
                     hciData = BtSnoop.get_BTsnoop_RxPkt(hciData,writeData,t_us,0x02)
                 elif(writeData[0:2] == "05"):      #ISO_Data
+#                    print("Test 02")
                     hciData = BtSnoop.get_BTsnoop_RxPkt(hciData,writeData,t_us,0x05)
             
             BtSnoop.write_data_into_hci(hciData, self.f)
@@ -284,154 +246,11 @@ def main():
  
         if(infoHead.c2hNode != None):
             infoHead.c2hNode.get_snoop_pkt_Index_from_LA_data()
-            
+        
         if(infoHead.selectAndConvertIntoSnoop() == False):
             break
-        count += 1
-        if(count >= 10):
-            break
-       
-        
     
- 
- #   while(True):
- #       endLoopCount = 0x0
- #       for i in range(0,n):
- #           if(readInfo[i][1] == 0x00):
- #               readInfo[i] = get_snoop_pkt_idx_from_LA_data(readInfo[i])   #Check
- #           
- #           if(readInfo[i][1] == 0x02):
- #               endLoopCount = endLoopCount +1
- #       
- #       if(endLoopCount == n):
- #           break;
- #
- #       minTidx = get_earlist_packet_idx(readInfo)
- #       
- #       #record packet to snoop()        
- #       writeData = get_snoop_pkt_data_from_LA_data(readInfo[minTidx]).strip()
- #       t_us = BtSnoop.convert_time2timeStr(readInfo[minTidx][2] - Tbase) #readInfo[minTidx][2]
- #       print(readInfo[minTidx][2] - Tbase, "\t\t", writeData)
- #       
- #       length = int((len(writeData) + 1) / 3)
- #       hciData = BtSnoop.get_BTsnoop_PktHeader(length)
- #       
- #       if(minTidx == 0): #Host -> controller
- #           if(writeData[0:2] == "01"):    #command
- #               hciData = BtSnoop.get_BTsnoop_TxPkt(hciData, writeData, t_us, 0x01)
- #           elif(writeData[0:2] == "02"):    #ACL
- #               hciData = BtSnoop.get_BTsnoop_TxPkt(hciData, writeData, t_us, 0x02)
- #           elif(writeData[0:2] == "05"):    #ISO_ACL
- #               hciData = BtSnoop.get_BTsnoop_TxPkt(hciData, writeData, t_us, 0x05)
- #           else:
- #               print("DEBUG")
- #       else:
- #           #length = len(readData)
- #           #hciData = BtSnoop.get_BTsnoop_PktHeader(length)
- #               
- #           if(writeData[0:2] == "04"):        #event
- #               hciData = BtSnoop.get_BTsnoop_RxPkt(hciData,writeData,t_us,0x04)
- #           elif(writeData[0:2] == "02"):      #ACL
- #               hciData = BtSnoop.get_BTsnoop_RxPkt(hciData,writeData,t_us,0x02)
- #           elif(writeData[0:2] == "05"):      #ISO_Data
- #               hciData = BtSnoop.get_BTsnoop_RxPkt(hciData,writeData,t_us,0x05)
- #           else:
- #               print("Rx format error")
- #               #print("XXX: ", readData[0:2], hciData)
- #               exit()    
- #           
- #       BtSnoop.write_data_into_hci(hciData, f)
- #      
- #       readInfo[minTidx][1] = False
- #       readInfo[minTidx][2] = 999999
- #       readInfo[minTidx][3] = readInfo[minTidx][3] + readInfo[minTidx][4]
- #       #exit()
- #   
- #   f.close()
-
-
-#    infoH2C = InfoHead().init()
-#    infoH2C.fileName = sys.argv[0 + 2]
-#    infoH2C.direction = 0x00    #Host to controller
-#    print(infoH2C.direction, infoH2C.fileName)
-#    readInfo = []
-#    n = len(sys.argv) - 2
-#    #FileName / Read flag / T / index / len / data
-#    #skip first row
-#    for i in range(0,n):
-#        temp = [sys.argv[i+2],0,0,1,0]
-#        
-#        with open(sys.argv[i+2]) as f:
-#            csv_data = [row for row in csv.reader(f)]
-#            temp.append(csv_data)
-#            f.close()
-#        readInfo.append(temp)
-#    Tbase = get_base_time(readInfo,n)
-#    
-#    f = open(sys.argv[1], "wb") 
-#    txData = BtSnoop.get_BTsnoop_Header()
-#    BtSnoop.write_data_into_hci(txData, f)
-#
-#    #Find the first time    
-#    #Kingst format
-#    
-#    while(True):
-#        endLoopCount = 0x0
-#        for i in range(0,n):
-#            if(readInfo[i][1] == 0x00):
-#                readInfo[i] = get_snoop_pkt_idx_from_LA_data(readInfo[i])   #Check
-#            
-#            if(readInfo[i][1] == 0x02):
-#                endLoopCount = endLoopCount +1
-#        
-#        if(endLoopCount == n):
-#            break;
-#
-#        minTidx = get_earlist_packet_idx(readInfo)
-#        
-#        #record packet to snoop()        
-#        writeData = get_snoop_pkt_data_from_LA_data(readInfo[minTidx]).strip()
-#        t_us = BtSnoop.convert_time2timeStr(readInfo[minTidx][2] - Tbase) #readInfo[minTidx][2]
-#        print(readInfo[minTidx][2] - Tbase, "\t\t", writeData)
-#        
-#        length = int((len(writeData) + 1) / 3)
-#        hciData = BtSnoop.get_BTsnoop_PktHeader(length)
-#        
-#        if(minTidx == 0): #Host -> controller
-#            if(writeData[0:2] == "01"):    #command
-#                hciData = BtSnoop.get_BTsnoop_TxPkt(hciData, writeData, t_us, 0x01)
-#            elif(writeData[0:2] == "02"):    #ACL
-#                hciData = BtSnoop.get_BTsnoop_TxPkt(hciData, writeData, t_us, 0x02)
-#            elif(writeData[0:2] == "05"):    #ISO_ACL
-#                hciData = BtSnoop.get_BTsnoop_TxPkt(hciData, writeData, t_us, 0x05)
-#            else:
-#                print("DEBUG")
-#        else:
-#            #length = len(readData)
-#            #hciData = BtSnoop.get_BTsnoop_PktHeader(length)
-#                
-#            if(writeData[0:2] == "04"):        #event
-#                hciData = BtSnoop.get_BTsnoop_RxPkt(hciData,writeData,t_us,0x04)
-#            elif(writeData[0:2] == "02"):      #ACL
-#                hciData = BtSnoop.get_BTsnoop_RxPkt(hciData,writeData,t_us,0x02)
-#            elif(writeData[0:2] == "05"):      #ISO_Data
-#                hciData = BtSnoop.get_BTsnoop_RxPkt(hciData,writeData,t_us,0x05)
-#            else:
-#                print("Rx format error")
-#                #print("XXX: ", readData[0:2], hciData)
-#                exit()    
-#            
-#        BtSnoop.write_data_into_hci(hciData, f)
-#       
-#        readInfo[minTidx][1] = False
-#        readInfo[minTidx][2] = 999999
-#        readInfo[minTidx][3] = readInfo[minTidx][3] + readInfo[minTidx][4]
-#        #exit()
-#    
-#    f.close()
-    
-
-#    scriptFile.close()
+    infoHead.close()
     
 if __name__ == "__main__":
     main()   
