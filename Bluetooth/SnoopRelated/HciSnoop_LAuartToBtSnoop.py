@@ -206,7 +206,7 @@ class InfoHead():
 #                    print("Test 01")
 #                    exit()
                     hciData = BtSnoop.get_BTsnoop_TxPkt(hciData, writeData, t_us, 0x05)
-            elif(processState == 0x00):
+            elif(processState == 0x01):
                 if(writeData[0:2] == "04"):        #event
                     hciData = BtSnoop.get_BTsnoop_RxPkt(hciData,writeData,t_us,0x04)
                 elif(writeData[0:2] == "02"):      #ACL
