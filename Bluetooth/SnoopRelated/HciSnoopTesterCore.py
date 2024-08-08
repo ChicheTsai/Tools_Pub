@@ -144,6 +144,8 @@ def get_rxData_from_rxBuffer(port, pollingMode):
                     break
                 else:
                     keepRx = True
+#            else:
+#                print("XXXXXX", byteInBuffer, keepRx)
                 
               
             timeStamp1 = time.perf_counter() #time.time()
@@ -448,9 +450,30 @@ def scriptLineHandler(line, devStr):
         compData = compData.strip()
         
         rxByteLen = int(compData[6:8],16)
+
+        idx2 = line.find("_")
         
+        if(idx2 != -1):
+            polling_ms = line[idx2 + 1: idx1]
+            polling_ms = polling_ms.strip()
+            startTime = time.perf_counter()
+            pollingInSec = float(polling_ms) / 1000     #Now, it was converted as second
+        else:
+            startTime = 0
+            pollingInSec = 0
+        
+ 
         while(1):
-            readData = get_rxData_from_rxBuffer(port, 0x00)
+            readData = get_rxData_from_rxBuffer(port, waitRxFlag)
+            currentTime = time.perf_counter()
+            if(idx2 != -1):
+                if(currentTime - startTime >= pollingInSec ):
+                    debugPrint(True, "Wait for event timeout.")
+                    debugPrint(True, "Golden: " + compData)
+                    close_all_logs()
+                    exit() 
+
+            
             #print("XXX",(readData))
             if(readData == "" and waitRxFlag == 0x00):
                 debugPrint(True, "=========================")
@@ -469,6 +492,7 @@ def scriptLineHandler(line, devStr):
             
             recordingRxData2Snoop(port, readData, t_us)
             result = compare_rx_data(readData, compData)
+                        
             if(result== True):
                 debugPrint(False, "Compare pass")
                 if(readData_[0:2] != "05"):
@@ -484,7 +508,7 @@ def scriptLineHandler(line, devStr):
                 print("Rx:     ",readData)
                 #debugPrint(True, "Rx:     " + readData)
                 close_all_logs()
-                exit()
+                exit()           
             else:
                 debugPrint(False, "Wait for comparing pass")
     elif "PRINT:" == line[0:6]:
