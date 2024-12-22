@@ -1,0 +1,11 @@
+wait "host init done"	"M A I N   M E N U"
+sendln '1'
+wait "M A I N   M E N U"
+sendln '2'
+wait "M A I N   M E N U"
+sendln '3'
+wait "Bluetooth Address" "Stack Version"
+sendln '1'
+wait "M A I N   M E N U"
+sendln '11'
+wait "HCI Menu"
