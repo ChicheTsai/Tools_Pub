@@ -7,6 +7,7 @@ import multiprocessing as mp
 import BtSnoop
 #import HciSnoopTesterCore
 import signal
+import threading
 
 class DEV_NODE:
     def __init__(self, baudRate, port, serialInfo, f, loopCount, loopCmd, handlerState, gRxBuf):
@@ -17,7 +18,12 @@ class DEV_NODE:
         self.loopCount = loopCount  
         self.loopCmd = loopCmd 
         self.handlerState = handlerState
+        self.gTxBuf = []
         self.gRxBuf = gRxBuf
+        self.gRxData = []
+        self.gRxCompBuf = []
+        self.gPollingTime = 0
+        self.trxState = 0
 
 class LOOP_NODE:
     def __init__(self,  loopCount, loopCmd):
@@ -27,9 +33,15 @@ class LOOP_NODE:
 class VAR_NODE:
     def __init__(self):
         self.var = []
-        for i in range(0,30):
+        for i in range(0,40):
             self.var.append("")
 
+class THREAD_SET:
+    def __init__(self):
+        self.scriptFile = ""
+        self.startTxEvent = [];
+        self.startRxEvent = [];
+        self.startRxCheckEvent = [];
 #====== Global variables =====
 gDevNode = {}
 gLoopInfo = {}
@@ -37,6 +49,7 @@ lineCount   = 0;
 gHandlerState = 0x00
 gVariable = VAR_NODE()
 AutoRx = 0x0
+event = THREAD_SET()
 
 #======= Configurations ======
 HCI_SNOOP_ENABLE    = True
@@ -79,6 +92,8 @@ def Parameter_Replace(lineStr):
         lineStr = lineStr.replace(X, gVariable.var[10 + i])
         X = "R" + str(i)
         lineStr = lineStr.replace(X, gVariable.var[20 + i])
+        X = "T" + str(i)
+        lineStr = lineStr.replace(X, gVariable.var[30 + i])
     return lineStr    
 
 def close_all_logs():
@@ -104,143 +119,92 @@ def is_dataInRxBufEnough(dataBuf):
     else:
         return False
                 
-def get_rxData_from_rxBuffer(port, pollingMode):
+def get_rxData_from_rxBuffer(port):
     global SIMULATION_DISABLE
     global gDevNode
     
-    if(SIMULATION_DISABLE):
-        ser = gDevNode[port].serialInfo
-        keepRx = False
-        timeStamp0 = time.perf_counter() #time.time()
+    ser = gDevNode[port].serialInfo
+    keepRx = False
+    timeStamp0 = time.perf_counter() #time.time()
         
-        while(1):
-            debugStart = time.perf_counter()
-#            time.sleep(1/1000) 
-            #rx = (ser.read(256*2)).hex()
-#            rx = (ser.read(int(256*1.5))).hex()
-#            #rx = (ser.read_all()).hex()
-#            if(rx != "" or gDevNode[port].gRxBuf != []):
-#                #print(rx)
-#                #rx = rx.hex()
-#                break
-            byteInBuffer = ser.in_waiting
-#            print(byteInBuffer)
-            if(byteInBuffer == 0 and keepRx == True):
-                keepRx = True
-            elif((byteInBuffer != 0 or gDevNode[port].gRxBuf != [])):
-                #print(byteInBuffer)
-#                #rx = rx.hex()
+    while(1):
+        byteInBuffer = ser.in_waiting
+        timeStamp1 = time.perf_counter()
+        if((byteInBuffer != 0 or gDevNode[port].gRxBuf != [])):
+            rx = ((ser.read(byteInBuffer)).hex()).upper()
+            for i in range(0, len(rx), 2):
+                gDevNode[port].gRxBuf.append( rx[i:i+2] )
                 
-                #print("TimingDebug: ",debugStart, time.perf_counter(),"\n")
-                rx = (ser.read(byteInBuffer)).hex()
-                
-                rx = rx.upper()
-                #print(rx,"\n\n", len(rx))
-                for i in range(0, len(rx), 2):
-                    gDevNode[port].gRxBuf.append( rx[i:i+2] )
-                    
-                if(is_dataInRxBufEnough(gDevNode[port].gRxBuf)):
-                    keepRx = False
-                    break
-                else:
-                    keepRx = True
-#            else:
-#                print("XXXXXX", byteInBuffer, keepRx)
-                
-              
-            timeStamp1 = time.perf_counter() #time.time()
-
-            if(pollingMode == 0x01):
-                if(timeStamp1 - timeStamp0 > 0.1):
-                    return ""
-            else:
-                if(timeStamp1 - timeStamp0 > 10):
-                    return ""
-                    
-        #while(1):
-        #    rx = (ser.read()).hex()
-        #    if(rx != ""):
-        #        rx = rx.upper()
-        #        gRxBuf[port].append(rx)
-        #    elif(gRxBuf[port] != []):
-        #        break;    
-        #print(port,"\t", gRxBuf[port])  
-        try:
-            #paraLen = int(gRxBuf[port][2],16)
-            #retBuf = (gRxBuf[port][0:paraLen + 3])
-            #gRxBuf[port] = gRxBuf[port][paraLen + 3 : ]
+            if(is_dataInRxBufEnough(gDevNode[port].gRxBuf)):
+                timeStamp1 = time.perf_counter()
+                break
             
-            if(int( gDevNode[port].gRxBuf[0],16) == 0x04):
-                paraLen = int( gDevNode[port].gRxBuf[2],16)
-                retBuf = ( gDevNode[port].gRxBuf[0:paraLen + 3] )
-                gDevNode[port].gRxBuf = gDevNode[port].gRxBuf[paraLen + 3 : ]
-            elif(int( gDevNode[port].gRxBuf[0],16) == 0x02):
-                paraLen = (int( gDevNode[port].gRxBuf[4],16)<<8)  + int( gDevNode[port].gRxBuf[3],16)
-                retBuf = ( gDevNode[port].gRxBuf[0:paraLen + 5] )
-                gDevNode[port].gRxBuf = gDevNode[port].gRxBuf[paraLen + 5 : ]   
-            elif(int( gDevNode[port].gRxBuf[0],16) == 0x05):
-                paraLen = (int( gDevNode[port].gRxBuf[4],16)<<8)  + int( gDevNode[port].gRxBuf[3],16)
-                
-                #retBuf = ( gDevNode[port].gRxBuf[0:paraLen + 5] )
-                #gDevNode[port].gRxBuf = gDevNode[port].gRxBuf[paraLen + 5 : ]                 
-                
-                timeStamp = int( gDevNode[port].gRxBuf[2],16) & 0x40
+        elif(timeStamp1 > gDevNode[port].gPollingTime):
+            return ""
+    try:
+        #paraLen = int(gRxBuf[port][2],16)
+        #retBuf = (gRxBuf[port][0:paraLen + 3])
+        #gRxBuf[port] = gRxBuf[port][paraLen + 3 : ]
         
-                if(timeStamp):
-                    #paraLen = paraLen + 5 + 4
-                    retBuf = ( gDevNode[port].gRxBuf[0:paraLen +5] )
-                    gDevNode[port].gRxBuf = gDevNode[port].gRxBuf[paraLen+5 : ] 
-                    #print("paraLen0: ",paraLen)
-                    #retBuf = ( gDevNode[port].gRxBuf[0:paraLen + 5] )
-                    #isoLen = int(hciData[9:11],16) - 1
-                    #hciData = hciData[0:9] + hex(isoLen)[2:4] + hciData[11:]
-                    #hciData = hciData + " " + hciData + " 00 00 00 00" + " 00 00 00 00"  + " " + t_us + " " + txData
-                    #print("Renew")
-                else:
-                    #paraLen = paraLen + 5
-                    retBuf = ( gDevNode[port].gRxBuf[0:paraLen+5] )
-                    gDevNode[port].gRxBuf = gDevNode[port].gRxBuf[paraLen+5 : ] 
-                    print("paraLen1: ",paraLen)
-                
-                #print( gDevNode[port].gRxBuf[0:paraLen] )
-                    
-                #print(isoLen, hex(isoLen), timeStamp)
-                
-            return retBuf
-        except:
-            debugPrint(True, "Data received from queue error")
-            print(byteInBuffer)
-            print(gDevNode[port].gRxBuf)
-            print(rx)
-            print(len(rx))
-            print(gDevNode[port].gRxBuf[0])
-            exit()
+        if(int( gDevNode[port].gRxBuf[0],16) == 0x04):
+            paraLen = int( gDevNode[port].gRxBuf[2],16)
+            retBuf = ( gDevNode[port].gRxBuf[0:paraLen + 3] )
+            gDevNode[port].gRxBuf = gDevNode[port].gRxBuf[paraLen + 3 : ]
+        elif(int( gDevNode[port].gRxBuf[0],16) == 0x02):
+            paraLen = (int( gDevNode[port].gRxBuf[4],16)<<8)  + int( gDevNode[port].gRxBuf[3],16)
+            retBuf = ( gDevNode[port].gRxBuf[0:paraLen + 5] )
+            gDevNode[port].gRxBuf = gDevNode[port].gRxBuf[paraLen + 5 : ]   
+        elif(int( gDevNode[port].gRxBuf[0],16) == 0x05):
+            paraLen = (int( gDevNode[port].gRxBuf[4],16)<<8)  + int( gDevNode[port].gRxBuf[3],16)
+            
+            #retBuf = ( gDevNode[port].gRxBuf[0:paraLen + 5] )
+            #gDevNode[port].gRxBuf = gDevNode[port].gRxBuf[paraLen + 5 : ]                 
+            
+            timeStamp = int( gDevNode[port].gRxBuf[2],16) & 0x40
+    
+            if(timeStamp):
+                #paraLen = paraLen + 5 + 4
+                retBuf = ( gDevNode[port].gRxBuf[0:paraLen +5] )
+                gDevNode[port].gRxBuf = gDevNode[port].gRxBuf[paraLen+5 : ] 
+                #print("Renew")
+            else:
+                #paraLen = paraLen + 5
+                retBuf = ( gDevNode[port].gRxBuf[0:paraLen+5] )
+                gDevNode[port].gRxBuf = gDevNode[port].gRxBuf[paraLen+5 : ] 
+                print("paraLen1: ",paraLen)
+            
+        return retBuf
+    except:
+        debugPrint(True, "Data received from queue error")
+        print(byteInBuffer)
+        print(gDevNode[port].gRxBuf)
+        print(rx)
+        print(len(rx))
+        print(gDevNode[port].gRxBuf[0])
+        exit()
 
 def compare_rx_data(rx, golden):
     global gVariable;
-#    print("compare_rx_data")
+
+#    print("compare_rx_data start")
     ret = True
     if(RX_COMPARE_ENABLE):        
-#        debugPrint(False, golden)
-        golden = str(golden).split(' ')
-        rx = " ".join(str(x) for x in rx)
-        rx = str(rx).split(' ')
-        
+        rx = rx.split()
+        golden = golden.split()
         if(len(golden) != len(rx)):
             ret = False
         else:
-            for i in range(len(rx)):
+            for i in range(0, len(rx)):
+                #print(rx[i], golden[i], rx[i] != golden[i], golden[i][0], golden[i][1])
                 if(rx[i] != golden[i]):
                     if(golden[i] != "??" and golden[i][0] != "R"):
                         ret = False
                         break
+                    elif(golden[i][0] == "R"):
+                        X = int(golden[i][1])
+                        gVariable.var[20 + X] = rx[i]
 
-        # Update Rn here
-        if(ret == True):
-            for i in range(len(rx)):
-                if(golden[i][0] == "R"):
-                    X = int(golden[i][1])
-                    gVariable.var[20 + X] = rx[i]
+#    print("compare_rx_data end")
     return ret  
     
 def recordingRxData2Snoop(port, readData, t_us):
@@ -267,6 +231,7 @@ def recordingRxData2Snoop(port, readData, t_us):
             exit()    
             
         #hciData = bytes.fromhex(hciData)
+        #print("recordingRxData2Snoop", port, gDevNode[port].f )
         BtSnoop.write_data_into_hci(hciData, gDevNode[port].f)
     
 def isLineFilterIn(line, devStr):
@@ -293,6 +258,7 @@ def scriptLineHandler(line, devStr):
     global gDevNode, gLoopInfo
     global gHandlerState
     global AutoRx
+    global event
     #global script
     
     ret = 0x00
@@ -309,7 +275,7 @@ def scriptLineHandler(line, devStr):
         elif(line[0:6] == "WAITRX"):
             port = line[0:7].replace("WAITRX","DEV")
         else:
-            port = "DEV1"
+            port = "DEAD_PORT"
     else:
         port = devStr
     #print("scriptLineHandler: ",line, devStr)
@@ -359,36 +325,34 @@ def scriptLineHandler(line, devStr):
         debugPrint(True, "Delay "+ str(delay_ms) +"ms")
         
         currentTime = startTime = time.perf_counter()
-        
         delayInSec = float(delay_ms) / 1000
         while(currentTime - startTime < delayInSec):
             currentTime = time.perf_counter()
 #===================================================================================#
     elif("POLLING:" in line[0:8]):
+        #gPollingTime
         polling_ms = line[8:]
         polling_ms = polling_ms.strip()
-        keysInTab = gDevNode.keys()
+        #keysInTab = gDevNode.keys()
                 
         currentTime = startTime = time.perf_counter()
         pollingInSec = float(polling_ms) / 1000     #Now, it was converted as second
         
+        
         if(pollingInSec >= 60):
-            print(time.ctime())
-            
-        while(currentTime - startTime < pollingInSec):
-            for i in keysInTab:
-                tempSer = gDevNode[i].serialInfo
-                savedTO = tempSer.timeout
-                tempSer.timeout = pollingInSec
-                readData = get_rxData_from_rxBuffer(i,1)
-                if(readData != ""):
-                    t_us = BtSnoop.convert_time2timeStr(time.perf_counter());
-                    recordingRxData2Snoop(i, readData, t_us)
-            
-                tempSer.timeout = savedTO
-                currentTime = time.perf_counter()
-                if(currentTime - startTime >= pollingInSec):
+            debugPrint(True, "Polling "+ str(pollingInSec) +"ms")
+            debugPrint(True, "\tstartTime "+ str(startTime) +"ms")
+
+        for k in gDevNode.keys():
+            gDevNode[k].trxState = gDevNode[k].trxState | 0x04
+            gDevNode[k].gRxCompBuf = []
+            gDevNode[k].gPollingTime = pollingInSec + startTime            
+            event.startRxEvent.set()
+        
+            while True:
+                if((gDevNode[k].trxState & 0x04) == 0x00):
                     break
+
        #print(currentTime, startTime)
 #===================================================================================#   
     elif "TX" == line[0:2]:
@@ -409,34 +373,24 @@ def scriptLineHandler(line, devStr):
             
             if(txData[0:2] == "01"):        #command
                 hciData = BtSnoop.get_BTsnoop_TxPkt(hciData, txData, t_us, 0x01)
-                #print(hciData)
-                #print(txData)
-                #print(length)
             elif(txData[0:2] == "02"):      #ACL
                 hciData = BtSnoop.get_BTsnoop_TxPkt(hciData, txData, t_us, 0x02)
             elif(txData[0:2] == "05"):      #ISO_ACL
-                #print(hciData)
                 hciData = BtSnoop.get_BTsnoop_TxPkt(hciData, txData, t_us, 0x05)
-                #print(hciData)
-                #print(txData)
-                #print(length)
             else:
                 print("scriptLineHandler, Tx ,DEBUG")
-
-            #hciData = bytes.fromhex(hciData)
-            #print("ooo ", gDevNode[port].f.tell())
             BtSnoop.write_data_into_hci(hciData, gDevNode[port].f)
-                        
-        ##ser.write(bytes([0x01,0x03,0x0C,0x00]))
-        if(SIMULATION_DISABLE):
-            txData = bytes.fromhex(txData)
-            #ser = gComPort[port][1]
-            ser = gDevNode[port].serialInfo
-            ser.write(txData)  #close with simulation
+        
+        gDevNode[port].gTxBuf.append(txData)
+        gDevNode[port].trxState = gDevNode[port].trxState | 0x01
+        event.startTxEvent.set()
+        while True:
+            if((gDevNode[port].trxState & 0x01) == 0x00):
+                break
             
-        if(AutoRx != 0x00):
-            #print("POLLING: " + str(AutoRx))
-            scriptLineHandler("POLLING: " + str(AutoRx), devStr)
+#        if(AutoRx != 0x00):
+#            #print("POLLING: " + str(AutoRx))
+#            scriptLineHandler("POLLING: " + str(AutoRx), devStr)
 #===================================================================================#            
     elif "RX" == line[0:2] or "WAITRX" == line[0:6]:
         idx0 = line.find("RX")
@@ -448,146 +402,209 @@ def scriptLineHandler(line, devStr):
         #print(devStr, port)
         compData = line[idx1+1:len(line) + 1].strip()
         compData = compData.strip()
+        #print("compData ", compData)
         
         rxByteLen = int(compData[6:8],16)
 
         idx2 = line.find("_")
-        
+        #print("idx2", idx2) #DEBUG
         if(idx2 != -1):
             polling_ms = line[idx2 + 1: idx1]
             polling_ms = polling_ms.strip()
             startTime = time.perf_counter()
             pollingInSec = float(polling_ms) / 1000     #Now, it was converted as second
+            gDevNode[port].trxState = gDevNode[port].trxState | 0x02 | 0x04
         else:
             startTime = 0
             pollingInSec = 0
+            
+            if(waitRxFlag):
+                gDevNode[port].trxState = gDevNode[port].trxState | 0x02 | 0x04
+            else:
+                gDevNode[port].trxState = gDevNode[port].trxState | 0x02
         
- 
-        while(1):
-            readData = get_rxData_from_rxBuffer(port, waitRxFlag)
-            currentTime = time.perf_counter()
-            if(idx2 != -1):
-                if(currentTime - startTime >= pollingInSec ):
-                    debugPrint(True, "Wait for event timeout.")
-                    debugPrint(True, "Golden: " + compData)
-                    close_all_logs()
-                    exit() 
+        gDevNode[port].gRxCompBuf = compData
+        event.startRxEvent.set()
+        while True:
+            if((gDevNode[port].trxState & 0x06) == 0x00):
+                break
+            elif(gDevNode[port].trxState & 0x80):
+                break
 
+    elif "SET_INCREASE:" == line[0:13]:
+        parIdxStart = line.find("(")
+        parIdxStop = line.find(")")
+        valIdxStart = line[parIdxStart+1:].find("(") + parIdxStart + 1
+        valIdxStop = line[parIdxStop+1:].find(")") + parIdxStop + 1
+        str1 = line[parIdxStart+1 : parIdxStop]
+        str2 = line[valIdxStart+1 : valIdxStop]
+
+        breakFlag = False
+        c = 0
+        while True:
+            idx_1 = str1.find(",")
+            idx_2 = str2.find(",")
+            if(idx_1 != -1):
+                para = str1[:idx_1].strip()
+                str1 = str1[idx_1+1:]
+            else:
+                para = str1.strip()
+
+            if(idx_2 != -1):
+                val = str2[:idx_2].strip()
+                str2 = str2[idx_2+1:]
+                
+                #print(para, val )
+            else:
+                val = str2.strip()
+                #print(para, val )
+                breakFlag = True
             
-            #print("XXX",(readData))
-            if(readData == "" and waitRxFlag == 0x00):
-                debugPrint(True, "=========================")
-                debugPrint(True, "| Data received Timeout |")
-                debugPrint(True, "=========================")
-            elif(readData == "" and waitRxFlag):
-                continue
+            if(para[0] == "Y"):
+                pos = 0
+            elif(para[0] == "Z"):
+                pos = 10   
+            elif(para[0] == "R"):
+                pos = 20
+            elif(para[0] == "T"):
+                pos = 30
             
-            
+            pos += (int(para[1],16))
+            val = int(gVariable.var[pos],16) + int(val,16)
+
+            if(val >= 0x100):
+                c = 1
+                val -= 0x100
+            else:
+                c = 0
+            #print(pos, val, hex(val)[2:])
+            gVariable.var[pos] = hex(val)[2:].upper().zfill(2)
+
+            if(breakFlag):
+                break
+        
+
+    elif "PRINT:" == line[0:6]:
+        debugPrint(LABEL_SHOWING, line[6:].strip())
+#===================================================================================#
+    elif "END" == line[0:3]:        
+        for k in gDevNode.keys():
+            while True:
+                if((gDevNode[k].trxState & 0x0F) == 0x00):
+                    gDevNode[k].trxState |= 0x80
+                    break    
+                    
+        print(gVariable.var[30:40])
+        return 0xDEAD
+
+#================ Functions for Threads =========================#
+def UART_StartTx():
+    global event, gDevNode
+    
+    while True:
+        event.startTxEvent.wait()             
+        event.startTxEvent.clear()
+        
+        for k in gDevNode.keys():
+            while (gDevNode[k].gTxBuf != []):
+                txData = bytes.fromhex(gDevNode[k].gTxBuf[0])
+                gDevNode[k].gTxBuf.pop(0)
+                ser = gDevNode[k].serialInfo
+                ser.write(txData)
+        
+            gDevNode[k].trxState = gDevNode[k].trxState & ~(0x01)
+
+def UART_StartRx():
+    global event, gDevNode
+    while True:
+        event.startRxEvent.wait()             
+        event.startRxEvent.clear()
+
+        for k in gDevNode.keys():
+            port = k
+
+            #print("UART_StartRx: ",gDevNode[port].trxState)
+            startTime = time.perf_counter()
+            while(1):
+                readData = get_rxData_from_rxBuffer(port)
+                currentTime = time.perf_counter()
+                
+                #print(gDevNode[port].gPollingTime, currentTime)
+                if(gDevNode[port].trxState & 0x04):
+                    if(readData == ""):                    
+                        if(currentTime < gDevNode[port].gPollingTime):
+                            continue
+                        else:
+                            gDevNode[port].trxState &= ~(0x04)
+                            break
+                    else:
+                        break
+                elif(gDevNode[port].trxState & 0x02):
+                    if(readData == ""):
+                        if(currentTime - startTime > 5):
+                            break
+                        else:
+                            continue
+                    break
+                    
             t = time.perf_counter() #time.time()
             t_us = BtSnoop.convert_time2timeStr(t);
-            #print("02: ", t)
-            
-            readData_ = " ".join(str(x) for x in readData)
-            debugPrint(False, str(readData))
-            
-            recordingRxData2Snoop(port, readData, t_us)
-            result = compare_rx_data(readData, compData)
-                        
-            if(result== True):
-                debugPrint(False, "Compare pass")
-                if(readData_[0:2] != "05"):
-                    debugPrint(TRX_DATA_SHOWING, "RX" + line[idx0+2:idx1] + ": "+ readData_)
-                    debugPrint(False, "RX" + line[idx0+2:idx1] + ": "+ readData_)
-                else:
-                    debugPrint(TRX_DATA_SHOWING, "ISO_DATA_IN")
                 
-                break;
-            elif(waitRxFlag == False):
-                debugPrint(True, "Compare Failed.")
-                debugPrint(True, "Golden: " + compData)
-                print("Rx:     ",readData)
-                #debugPrint(True, "Rx:     " + readData)
-                close_all_logs()
-                exit()           
-            else:
-                debugPrint(False, "Wait for comparing pass")
-    elif "PRINT:" == line[0:6]:
-        debugPrint(LABEL_SHOWING, line[6:])
-#===================================================================================#
-    elif "END" == line[0:3]:
-
-        #handlerState = 0xFF
-        #close_all_logs()
-        #print("============================")
-        #print("          Success           ")
-        #print("============================")
-        
-        #gDevNode[port].handlerState = 0xFF
-        return 0xFF
-        
-    
-def mainHadler(script, idx, devStr, inPort, inBaudRate, paras):
-    global gDevNode, gLoopInfo
-    scriptFile  = open(script, 'r')
-    scriptFile.seek(idx)
-    
-    gLoopInfo[0] = LOOP_NODE(loopCount = 0x00, loopCmd = [])
-    
-    if(SIMULATION_DISABLE):
-#        if(devStr != "SERIAL"):
-#            gDevNode[devStr] = DEV_NODE(port = inPort, 
-#                                     baudRate = inBaudRate,
-#                                     serialInfo = 0x00, 
-#                                     f = 0x00, 
-#                                     loopCount = 0x00, 
-#                                     loopCmd = [], 
-#                                     handlerState = 0x00, 
-#                                     gRxBuf = [])
-#
-#            #print(gDevNode[devStr])                                     
-#            
-#            gDevNode[devStr].serialInfo = serial.Serial(gDevNode[devStr].port, gDevNode[devStr].baudRate, timeout= (0.001/inBaudRate))
-#            ser = gDevNode[devStr].serialInfo
-#            ser.setRTS(True)
-#            ser.close()
-#            ser.open()
-#            ser.setRTS(True)   
-#
-#            refillParas(paras)
-#            
-#        else:
-#            print("XXX")
-        for k in gDevNode.keys():
-            gDevNode[k].serialInfo = serial.Serial(gDevNode[k].port, gDevNode[k].baudRate, timeout= (0.001 /gDevNode[k].baudRate))
-            ser = gDevNode[k].serialInfo
-            ser.setRTS(True)
-            ser.close()
-            ser.open()
-            ser.setRTS(True)
-    
-    if(HCI_SNOOP_ENABLE):
-        timePofix = time.strftime("%Y%m%d%H%M%S", time.localtime())
-#        if(devStr != "SERIAL"):
-#            newName = script.replace(".txt", "_"+ devStr+ "_" +timePofix + ".cfa")
-#            f = open(newName, "wb") 
-#            #f = open("hci_" + port + ".log", "wb")
-#            #gComPort[dev][2] = f
-#            gDevNode[devStr].f = f
-#    
-#            txData = BtSnoop.get_BTsnoop_Header()
-#            BtSnoop.write_data_into_hci(txData, gDevNode[devStr].f)
-#        else:
-        for k in gDevNode.keys():
-            newName = script.replace(".txt", "_"+ k+ "_" + timePofix + ".cfa")
-            f = open(newName, "wb") 
-            gDevNode[k].f = f
-    
-            txData = BtSnoop.get_BTsnoop_Header()
-            BtSnoop.write_data_into_hci(txData, gDevNode[k].f)
+            #readData_ = " ".join(str(x) for x in readData)
             
+            if(readData != ""):
+                recordingRxData2Snoop(port, readData, t_us)
+                gDevNode[port].gRxData = readData
+                event.startRxCheckEvent.set()            
+
+def UART_RxCompare():    
+    global event, gDevNode
+    while True:
+        event.startRxCheckEvent.wait()             
+        event.startRxCheckEvent.clear()
+        
+        for k in gDevNode.keys():
+            port = k
+            #print("UART_RxCompare Start", gDevNode[port].trxState)
+            
+            readData_ = " ".join(str(x) for x in gDevNode[port].gRxData)
+            
+            if(gDevNode[port].trxState & 0x02):
+                result = compare_rx_data(readData_, gDevNode[port].gRxCompBuf)
+            else:
+                result = False
+            
+            #print(result, gDevNode[port].trxState)
+            portIdx = port.replace("DEV","")
+            if(result == True):
+                gDevNode[port].trxState &= ~(0x02 | 0x04)
+                debugPrint(True, "RX" + portIdx + ": " + readData_)
+            elif(gDevNode[port].trxState & 0x04 ):  #keep receving
+                debugPrint(True, "RX" + portIdx + ": " + readData_)
+                
+                if(gDevNode[port].trxState & 0x02):
+                    event.startRxEvent.set()
+                else:
+                    currentTime = time.perf_counter()
+                    if(currentTime < gDevNode[port].gPollingTime):
+                        event.startRxEvent.set()
+                    else:
+                        gDevNode[port].trxState &= ~(0x04)
+                
+            elif(gDevNode[port].trxState & 0x02 ):  #keep receving
+                gDevNode[port].trxState &= ~(0x02)
+                gDevNode[port].trxState |= 0x80
+                debugPrint(True, "!!!!! COMPARE FAILED !!!!!")
+                debugPrint(True, "Golden: " + gDevNode[port].gRxCompBuf)
+                debugPrint(True, "Rx    : " + readData_)
+            
+            
+def mainThread_Fn():      
+    global event
+
     while(True):
         # Get next line from file
-        line = scriptFile.readline()
+        line = event.scriptFile.readline()
         
         # if line is empty
         # end of file is reached
@@ -598,14 +615,54 @@ def mainHadler(script, idx, devStr, inPort, inBaudRate, paras):
         line = line.strip()   
         line = line.upper()   
         
-        if(isLineFilterIn(line, devStr)):
-            #print("mainHadler, ", devStr, line)
-            ret = scriptLineHandler(line, devStr)
+        #if(isLineFilterIn(line, devStr)):
+        #    #print("mainHadler, ", devStr, line)
+        ret = scriptLineHandler(line, "SERIAL")
         
-        if(ret == 0xFF):
+        if(ret == 0xDEAD):
             return
-    #return 'The pool return result: ' + str(num) + str(time.perf_counter())
-    return ""       
+    
+    
+def mainHadler(script, idx, devStr, inPort, inBaudRate, paras):
+    global gDevNode, gLoopInfo, event
+    event.scriptFile  = open(script, 'r')
+    event.scriptFile.seek(idx)
+    
+    gLoopInfo[0] = LOOP_NODE(loopCount = 0x00, loopCmd = [])
+    timePofix = time.strftime("%Y%m%d%H%M%S", time.localtime())
+    
+    for k in gDevNode.keys():
+        gDevNode[k].serialInfo = serial.Serial(gDevNode[k].port, gDevNode[k].baudRate, timeout= (0.001 /gDevNode[k].baudRate))
+        ser = gDevNode[k].serialInfo
+        ser.setRTS(True)
+        ser.close()
+        ser.open()
+        ser.setRTS(True)
+    
+        if(HCI_SNOOP_ENABLE):
+            newName = script.replace(".txt", "_"+ k+ "_" + timePofix + ".cfa")
+            f = open(newName, "wb") 
+            gDevNode[k].f = f
+    
+            txData = BtSnoop.get_BTsnoop_Header()
+            BtSnoop.write_data_into_hci(txData, gDevNode[k].f)
+    
+        gDevNode[k].trxState = 0x00
+        event.startTxEvent = threading.Event()
+        event.startRxEvent = threading.Event()
+        event.startRxCheckEvent = threading.Event()
+        
+        mainThread  = threading.Thread(target=mainThread_Fn)
+        mainThread.start()
+        uartStartTx = threading.Thread(target=UART_StartTx)
+        uartStartTx.start()
+        uartStartRx = threading.Thread(target=UART_StartRx)
+        uartStartRx.start()
+        uartRxCompare = threading.Thread(target=UART_RxCompare)
+        uartRxCompare.start()
+        while True:
+            if(gDevNode[k].trxState & 0x80):
+                break     
     
 def TesterInitHandler(script, line):
     global HCI_SNOOP_ENABLE, SIMULATION_DISABLE
@@ -625,10 +682,12 @@ def TesterInitHandler(script, line):
             print("AutoRx is disabled")
         else:    
             print("AutoRx ", AutoRx, "ms")
-    elif (line[0:1] == "Y" or line[0:1] == "Z") and (line[1:2] >= "0" and line[1:2] <= "9"):
+    elif (line[0:1] == "Y" or line[0:1] == "Z" or line[0:1] == "T") and (line[1:2] >= "0" and line[1:2] <= "9"):
         pos = 0
         if (line[0:1] == "Z"):
             pos = 10
+        elif (line[0:1] == "T"):
+            pos = 30
         pos = pos + (ord(line[1:2]) - ord("0"))
         gVariable.var[pos] = Get_Parameter(line)
 #===================================================================================#
@@ -651,34 +710,7 @@ def TesterInitHandler(script, line):
                                      loopCmd = [], 
                                      handlerState = 0x00, 
                                      gRxBuf = [])
-            #print("TesterInitHandler", dev, gDevNode[dev])
-            
-#            if(SIMULATION_DISABLE):
-#                #gComPort[dev] = [port, serial.Serial(port, baudRate, timeout=0.03), 0]
-#                gDevNode[dev].serialInfo = serial.Serial(port, baudRate, timeout=0.03)
-#                #ser = gComPort[dev][1]
-#                ser = gDevNode[dev].serialInfo
-#                #gRxBuf[dev] = []
-#                
-#                ser.setRTS(True)
-#                ser.close()
-#                ser.open()
-#                ser.setRTS(True)
-            #else:
-            #    gComPort[dev] = [port, 0, 0]
-                
-            #if(HCI_SNOOP_ENABLE):
-            #    newName = script.replace(".txt", "_"+ port+".cfa")
-            #    f = open(newName, "wb") 
-            #    #f = open("hci_" + port + ".log", "wb")
-            #    #gComPort[dev][2] = f
-            #    #gDevNode[dev].f = f
-            #    
-            #    txData = BtSnoop.get_BTsnoop_Header()
-            #    BtSnoop.write_data_into_hci(txData, f)
-      
-           
-    
+             
 def TesterInit(script, scriptFile):
     localState = 0x00
     ret = [0]

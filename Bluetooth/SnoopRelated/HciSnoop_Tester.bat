@@ -10,7 +10,7 @@ echo %argNum%
 
 for %%x in (%*) do (
 	echo %%x
-	start cmd /k "py .\HciSnoop_Tester_3.2.py %%x"
+	start cmd /k "py .\HciSnoop_Tester_3.3.py %%x"
 
 )
 :: start cmd /k "py .\HciSnoop_Tester_3.1.py %1"
